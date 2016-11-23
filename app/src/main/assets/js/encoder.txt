@@ -1,0 +1,908 @@
+Кодирование видео в H264 (часть 1)
+
+Надоела реклама? Улучшите аккаунт всего за $1.66 месяц!
+Вообще конечно в одном таком посте невозможно написать всё про этот кодек. Он слишком большой, стандарт один страниц на 1000 плюс добавки, которые непрерывно появляются. Но для большинства обычных людей надо закодировать ролик или фильм, это наиболее распространённый способ использования в личных целях.
+
+Писать буду про x264, это как показывают разные сравнения наиболее сейчас выигрышная реализация (вообще то их очень много уже, но многие специализированные), код под GPL, поэтому бесплатная, и выдаёт наиболее качественный результат. В этом году будет очередное сравнение лабораторией МГУ (compression.ru это их сайт), посмотрим какие результаты будут на этот раз.
+
+Ну так вот про x264. По слухам его пишут бывшие авторы Xvid, которые, написав отличный, ставший де-факто стандартом пиратства, кодек MPEG4 смогли очень быстро создать лидирующую версию для H264. Вполне верю, очень похоже что опыт там был накоплен очень серьёзный. Поскольку я сам занимаюсь разработкой H264 кодека на работе, то код GPL x264 я смотреть не имею права, так что все остальные сведения о внутреннем устройстве, которые я тут может буду про него писать, являются только домыслами, правда неплохо подтверждаемыми данными реального анализа (в видео много можно сказать если есть хорошие программы, a la дизассемблер закодированного видео стрима).
+
+Сам кодек может работать отдельно, и доступен со своего домашнего сайта. Но, выдаёт он чистый битовый стрим видео, что не вполне удобно для нормальных людей (не знаю, может он и умеет заворачивать в какой-то контейнер, не пробовал), да и звук надо тоже добавлять обычно. Плюс врядли умеет читать многие разнообразные варианты входного потока, которые могут повстречаться если что-то там надо куда-то перекодировать. Но зато x264 присутствует как одна из компонент mplayer/mencoder в виде библиотеки, плюс все его опции там есть, так что можно сочетать удобство mplayer/mencoder, который читает что угодно, ну и закодировать может тоже как угодно, в том числе и используя x264 для видео.
+
+Про mplayer стоит сказать пару слов для пользователей windows. У тех у кого линукс, он наверняка есть. А вот бинарники для windows весьма устарели, последняя версия была 2007 года... только я это написал, заглянул на сайт, и блин уже есть наконец официальные билды для windows созданные совсем недавно. Так что этот абзац можно бы было удалить если бы не ещё одно. Mplayer, как и mencoder в оригинале чисто command line утилиты, что для многих очень сложно и не привычно. Ну ничем в этом не могу помочь кроме как дать линк на различные неофициальные фронтенды для mencoder. Ни одного ни разу не пробовал, и вероятно не буду. Я использую командную строку, привык уже. Так что дальше я буду писать про именно параметры командной строки, а есть они или нет в фронтендах я не знаю.
+
+Так вот про создание роликов или перекодирования фильмов. Этот вариант использования требует как правило максимального качества при том что время кодирования в принципе не важно. Это не видео-конференция где надо всё кодировать на лету, можно подождать, может даже на ночь оставить. Главное чтобы результат был качественным. Для достижения максимального качества обычно используют многопроходное кодирование, обычно 2-х проходное, но 3-4 тоже можно попробовать если никак не получается вместить то что требуется в нужный размер.
+
+Многопроходное кодирование обеспечивает необходимое перераспределение количества битов на каждый кадр для достижения максимального качества (оценка качества программными средствами это отдельная очень большая проблема) как правило используя метрику PSNR. Во всяком случае многопроходное кодирования должно давать результат лучше чем однопроходное, так как кодек на проходе после первого будет заранее иметь информацию о всех типах фреймов на всём протижении ролика, и их сложности для кодирования.
+
+Что-то я уже устал сегодня. Зато как-бы введение написал. Продолжение будет позже.
+Кодирование видео в H264 (часть 2)
+
+Надоела реклама? Улучшите аккаунт всего за $1.66 месяц!
+Первая часть была тут.
+
+По многочисленным просьбам перехожу к практической части. Правда всё равно надо написать как собственно видео кодируется. Поскольку я не книгу тут пишу, напишу очень коротко, со ссылками на материалы для самостоятельного изучения.
+
+Видео кодируется по кадрам. Для кодирования используется цветовое пространство YUV, а не RGB. Почему, сейчас объясню. Человеческий глаз гораздо сильнее чувствует яркость, а не цвета. Поэтому две цветовых компоненты можно передавать не целиком, а сильно их урезав. Как правило используется вариант 4:2:0 (логики в этом названии мало, в отличии от 4:2:2, но оно устоялось). Так что яркость передаётся на 100%, а цвет только на 25%. Получается что пикселей в цветовых кадрах в 4 раза меньше чем в яркостном, так как они в 2 раза меньше по горизонтали и по вертикали.
+
+Каждый кадр традиционно разбивают на так называемые макроблоки размером 16x16 пикселей для Y, и соответственно 8x8 для U и V. В h264 допускается дополнительно разбиение на части размером вплоть до 4x4 для Y, и 2x2 для U и V. Макроблоки могут кодироваться разными способами. В первую очередь это intra (внутри кадра) и inter (через кадр) варианты.
+
+Intra кодирования используется для кодирования ключевых кадров I (intra) и для кодирования в inter кадрах объектов, которые в других кадрах отсутсвуют. I кадры можно грубо сравнить с JPEG, они целиком состоят из intra макроблоков, но при этом используют самое большое количество бит для кодирования. Inter кодирование используется для кодирования P (predicted) и B (bi-predicted) кадров. В этом случае макроблоки ищут в других соседних кадрах, указывается вектор смещения и разница (которая чем меньше тем лучше) между соседним кадром и тем что должно быть. В случае дополнительного разбиения макроблока на подчасти вектора смещения можно указывать для каждой части отдельно. Это тратит больше бит в потоке, но даёт возможность передавать более сложное движение или больше деталей. Поиск наиболее подходящего варианта сдвига макроблока в соседних кадрах называют motion estimation. Эта часть подирования занимает львиную долю времени при кодировании видео. В h264 допускается вплоть до четверть-пиксельного (qpel) указание смещения макроблока, что сильно добавляет точности и качества результата, но существенно увеличивает время кодирования. Для полу- или четверть- пиксельного предсказания движения кадры интерполируются по специальным алгоритмам заложенным в стандарте, но памяти при этом используется тоже до 16 раз больше.
+
+Для кодирования макроблоки подвергаются косинусному преобразованию после чего наиболее значащие коэффициенты получаются в левом верхнем углу матрицы 16x16 или меньше для подразбиений и для цветовых макроблоков. Дополнительно макроблок подвергается квантизации, то есть, если грубо, выкидывают младшие биты у чисел полученных в результате косинуснового преобразования. Чем больше фактор квантизации, тем больше нулей получится в результате, а при кодировании в битовый поток это даёт возможность сэкономить биты. При этом теряется информация, поэтому при декодировании получается не совсем то что должно было получиться.
+
+После квантизации, вектора, квантизованные коэффициенты, информация о разбиении, индексы кадров, с которыми надо сравнивать макроблок если он inter, и другая информация кодируются энтропийным кодированием. В h264 есть два варианта, CAVLC (context adaptive variable length codes) и CABAC (context adaptive binary arythmetic codes). Второй кодирует всегда лучше, до 15%, но существенно сложнее при декодировании, правда сейчас это важно только для встроенных или малоскоростных устройств типа мобильников. Для фильмов всегда используют CABAC.
+
+Следующая часть будет уже про опции кодирования.
+Кодирование видео в H264 (часть 3)
+Вторая часть была тут. Её надо прочитать, иначе может быть непонятно всё, начиная с терминов.
+
+Поехали про опции. Вот раздел мануала mencoder с моими комментариями для кодирования x264
+
+
+x264enc (−x264encopts)
+
+ 	
+bitrate=<value>
+
+ 	
+Sets the average bitrate to be used in kbits/second (default: off). Since local bitrate may vary, this average may be inaccurate for very short videos (see ratetol). Constant bitrate can be achieved by combining this with vbv_maxrate, at significant reduction in quality.
+
+Битрейт это понятно что. Сколько битов надо тратить в секунду. При этом надо понимать что это ещё и зависит от frame rate, сколько кадров в секунду, так как если кадров в секунду много, то и битов будет много. Значение битрейта выявляется экспериментально или в зависимости от того сколько вообще есть места на целевом носителе.
+
+ 	
+qp=<0−51>
+
+ 	
+This selects the quantizer to use for P-frames. I- and B-frames are offset from this value by ip_factor and pb_factor, respectively. 20−40 is a useful range. Lower values result in better fidelity, but higher bitrates. 0 is lossless. Note that quantization in H.264 works differently from MPEG-1/2/4: H.264’s quantization parameter (QP) is on a logarithmic scale. The mapping is approximately H264QP = 12 + 6*log2(MPEGQP). For example, MPEG at QP=2 is equivalent to H.264 at QP=18.
+
+Это настройка фактора квантизации. Лучше вообще не указывать. Пусть он сам найдёт правильный QP.
+
+ 	
+crf=<1.0−50.0>
+
+ 	
+Enables constant quality mode, and selects the quality. The scale is similar to QP. Like the bitrate-based modes, this allows each frame to use a different QP based on the frame’s complexity.
+
+Очень интересный режим константного качества. Кажется он есть только в x264. Размер при этом выдержать нельзя, но зато качество как бы будет всегда постоянным. Оно оценивается наверняка по метрике PSNR, которая не всегда отражает качество для субъективного просмотра. Да и режим этот экспериментальный, на форумах у людей с ним часто бывают проблемы. Так что пользоваться не советую пока. Но вообще очень интересный режим, если не важет итоговый размер.
+
+ 	
+pass=<1−3>
+
+ 	
+Enable 2 or 3-pass mode. It is recommended to always encode in 2 or 3-pass mode as it leads to a better bit distribution and improves overall quality.
+
+ 	
+1
+
+ 	
+first pass
+
+ 	
+2
+
+ 	
+second pass (of two pass encoding)
+
+ 	
+3
+
+ 	
+Nth pass (second and third passes of three pass encoding)
+
+ 	
+Here is how it works, and how to use it:
+The first pass (pass=1) collects statistics on the video and writes them to a file. You might want to deactivate some CPU-hungry options, apart from the ones that are on by default.
+In two pass mode, the second pass (pass=2) reads the statistics file and bases ratecontrol decisions on it.
+In three pass mode, the second pass (pass=3, that is not a typo) does both: It first reads the statistics, then overwrites them. You can use all encoding options, except very CPU-hungry options.
+The third pass (pass=3) is the same as the second pass, except that it has the second pass’ statistics to work from. You can use all encoding options, including CPU-hungry ones.
+The first pass may use either average bitrate or constant quantizer. ABR is recommended, since it does not require guessing a quantizer. Subsequent passes are ABR, and must specify bitrate.
+
+Многопроходное кодирование. Вещь необходимая для создания качественного результата. Как я уже писал, в 1-проходном случае encoder не может оптимально перераспределить биты в потоке для сцен с большим движением и деталями, и для сцен, где движения мало, и деталей меньше. Поэтому он будет пытаться держать битрейт всегда одинаковым, а основной "ручкой" регулирования битрейта является фактор квантизации. Если вдруг encoder наткнётся на сцену с большим и сложным движением, он значительно "отквантизирует" её так что качество будет ниже чем в других сценах. Правда, считается что человек всё равно не заметит если в кадре всё быстро мелькает и дрыгается, но тем не менее артифакты сильного сжатия будут более заметными.
+
+2-проходного сжатия обычно хватает, так как encoder на первом проходе просчитывает типы кадров и примерный размер кадра. Но это всё немного приблизительно так как реальное кодирование на первом проходе обычно бывает не в самом высоком качестве. Поэтому для перфекционистов есть 3-й проход, где после 2-го уже качественного прохода информация известна вся. После 3-го прохода остальные смысла не имеют.
+
+ 	
+turbo=<0−2>
+
+ 	
+Fast first pass mode. During the first pass of a two or more pass encode it is possible to gain speed by disabling some options with negligible or even no impact on the final pass output quality.
+
+ 	
+0
+
+ 	
+disabled (default)
+
+ 	
+1
+
+ 	
+Reduce subq, frameref and disable some inter-macroblock partition analysis modes.
+
+ 	
+2
+
+ 	
+Reduce subq and frameref to 1, use a diamond ME search and disable all partition analysis modes.
+
+ 	
+Level 1 can increase first pass speed up to 2x with no change in the global PSNR of the final pass compared to a full quality first pass.
+Level 2 can increase first pass speed up to 4x with about +/− 0.05dB change in the global PSNR of the final pass compared to a full quality first pass.
+
+Турбо режим для первого прохода многопроходного кодирования. В случае 1 отключается четверть-пиксельная точность, в случае 2 используется быстрый грубый режим motion estimation. Этот режим чисто оценочный, а если процессор мощный то его вообще можно не использовать.
+
+ 	
+keyint=<value>
+
+ 	
+Sets maximum interval between IDR-frames (default: 250). Larger values save bits, thus improve quality, at the cost of seeking precision. Unlike MPEG-1/2/4, H.264 does not suffer from DCT drift with large values of keyint.
+
+Количество кадров между ключевыми. В h264 это число ничем не ограничено, так как точность не теряется в отличие от MPEG2. IDR это I кадр, ранее которого ни один P или B не могут ссылаться. Поэтому с него можно начинать декодирование как с начала фильма. IDR кадры используются при быстрой перемотке, так как с них начинается показ кадров, которые на него ссылаются. Если перемотка не нужна, то keyint можно указать очень большим, но умолчательное значение 250 и так уже довольно большое. Больше смысла делать мало, так как в количестве битов выигрыш будет минимальным.
+
+ 	
+keyint_min=<1−keyint/2>
+
+ 	
+Sets minimum interval between IDR-frames (default: 25). If scenecuts appear within this interval, they are still encoded as I-frames, but do not start a new GOP. In H.264, I-frames do not necessarily bound a closed GOP because it is allowable for a P-frame to be predicted from more frames than just the one frame before it (also see frameref). Therefore, I-frames are not necessarily seekable. IDR-frames restrict subsequent P-frames from referring to any frame prior to the IDR-frame.
+
+Минимальное количество кадров между IDR, то есть не ставить IDR слишком часто. Лучше не трогать, x264 вполне разумно их расставляет и так.
+
+ 	
+scenecut=<−1−100>
+
+ 	
+Controls how aggressively to insert extra I-frames (default: 40). With small values of scenecut, the codec often has to force an I-frame when it would exceed keyint. Good values of scenecut may find a better location for the I-frame. Large values use more I-frames than necessary, thus wasting bits. −1 disables scene-cut detection, so I-frames are inserted only once every other keyint frames, even if a scene-cut occurs earlier. This is not recommended and wastes bitrate as scenecuts encoded as P-frames are just as big as I-frames, but do not reset the "keyint counter".
+
+Фактор определения того что началась новая сцена (в этом случае большая вероятность того что encoder вставит I кадр, что соответственно отнимает много бит, но повышает качество для кадров которые на него будут ссылаться). Лучше не трогать, умолчательно значение вполне разумное.
+
+ 	
+frameref=<1−16>
+
+ 	
+Number of previous frames used as predictors in B- and P-frames (default: 1). This is effective in anime, but in live-action material the improvements usually drop off very rapidly above 6 or so reference frames. This has no effect on decoding speed, but does increase the memory needed for decoding. Some decoders can only handle a maximum of 15 reference frames.
+
+Максимальное количество кадров, на которые могут ссылаться P и B кадры. Экспериментально показано что больше чем 6 значение мало улучшает качество. В теории большое (очень большое) количество референсных кадров помогает кодированию сцен с циклическим движением (догадайтесь сами каким). Но проблема в том что декодеру надо держать в памяти все кадры, на которые могут быть ссылки, так что чем больше значение этого параметра, тем больше надо памяти. Железячные ускорители h264 типа видео карт допускают не более 6 кадров, и если их больше, то декодирование будет только на процессоре. Ну а то про что кто-то мог подумать, это повторяющееся движение часто требует больше чем 16 максимально позволяемых референсных кадров, так как 16 в случае 25 кадров в секунду это примерно 2/3 секунды.
+
+ 	
+bframes=<0−16>
+
+ 	
+maximum number of consecutive B-frames between I- and P-frames (default: 0)
+
+Максимальное количество B кадров подряд. На B кадрах в h264 экономится основное место. По сравнению с I кадрами они могут быть до 100 раз меньше, а по сравнению с P раз в 5-10 меньше. Так что много B кадров это хорошо. Но слишком много их быть не должно, так как увеличивается расстояние до ссылочных P кадров, да и качество начинает теряться. Нормальное значение должно быть 2-5. Следующая опция в любом случае предпочтительнее.
+
+ 	
+(no)b_adapt
+
+ 	
+Automatically decides when to use B-frames and how many, up to the maximum specified above (default: on). If this option is disabled, then the maximum number of B-frames is used.
+
+Определять автоматически сколько делать B кадров. Отменяет максимум указанный выше. Лучше пользоваться этой опцией, тем более что она и так включена по умолчанию.
+
+ 	
+b_bias=<−100−100>
+
+ 	
+Controls the decision performed by b_adapt. A higher b_bias produces more B-frames (default: 0).
+
+Лучше не трогать.
+
+ 	
+(no)b_pyramid
+
+ 	
+Allows B-frames to be used as references for predicting other frames. For example, consider 3 consecutive B-frames: I0 B1 B2 B3 P4. Without this option, B-frames follow the same pattern as MPEG-[124]. So they are coded in the order I0 P4 B1 B2 B3, and all the B-frames are predicted from I0 and P4. With this option, they are coded as I0 P4 B2 B1 B3. B2 is the same as above, but B1 is predicted from I0 and B2, and B3 is predicted from B2 and P4. This usually results in slightly improved compression, at almost no speed cost. However, this is an experimental option: it is not fully tuned and may not always help. Requires bframes >= 2. Disadvantage: increases decoding delay to 2 frames.
+
+Хорошая опция, которая позволяет использовать B кадры как референсные для других B. Для хорошего качества лучше включить.
+
+ 	
+(no)deblock
+
+ 	
+Use deblocking filter (default: on). As it takes very little time compared to its quality gain, it is not recommended to disable it.
+
+В h264 стандартом предусмотрен фильтр для удаления границ макроблоков. Как правило добавляет качество восприятия. Включать надо.
+
+ 	
+deblock=<−6−6>,<−6−6>
+
+ 	
+The first parameter is AlphaC0 (default: 0). This adjusts thresholds for the H.264 in-loop deblocking filter. First, this parameter adjusts the maximum amount of change that the filter is allowed to cause on any one pixel. Secondly, this parameter affects the threshold for difference across the edge being filtered. A positive value reduces blocking artifacts more, but will also smear details.
+The second parameter is Beta (default: 0). This affects the detail threshold. Very detailed blocks are not filtered, since the smoothing caused by the filter would be more noticeable than the original blocking.
+The default behavior of the filter almost always achieves optimal quality, so it is best to either leave it alone, or make only small adjustments. However, if your source material already has some blocking or noise which you would like to remove, it may be a good idea to turn it up a little bit.
+
+Пороги работы деблочного фильтра. Лучше не трогать.
+
+ 	
+(no)cabac
+
+ 	
+Use CABAC (Context-Adaptive Binary Arithmetic Coding) (default: on). Slightly slows down encoding and decoding, but should save 10−15% bitrate. Unless you are looking for decoding speed, you should not disable it.
+
+CABAC включен по умолчанию. Отключать не стоит.
+
+ 	 
+
+Продолжение в другой части, а то мне ЖЖ заявляет post too large.
+Кодирование видео в H264 (часть 4)
+Продолжение про опции. Предыдущая часть была тут.
+
+ 	
+qp_min=<1−51> (ABR or two pass)
+
+ 	
+Minimum quantizer, 10−30 seems to be a useful range (default: 10).
+
+Лучше не трогать.
+
+ 	
+qp_max=<1−51> (ABR or two pass)
+
+ 	
+maximum quantizer (default: 51)
+
+Лучше не трогать.
+
+ 	
+qp_step=<1−50> (ABR or two pass)
+
+ 	
+maximum value by which the quantizer may be incremented/decremented between frames (default: 4)
+
+Лучше не трогать.
+
+ 	
+ratetol=<0.1−100.0> (ABR or two pass)
+
+ 	
+allowed variance in average bitrate (no particular units) (default: 1.0)
+
+Лучше не трогать.
+
+ 	
+vbv_maxrate=<value> (ABR or two pass)
+
+ 	
+maximum local bitrate, in kbits/second (default: disabled)
+
+Лучше не трогать.
+
+ 	
+vbv_bufsize=<value> (ABR or two pass)
+
+ 	
+averaging period for vbv_maxrate, in kbits (default: none, must be specified if vbv_maxrate is enabled)
+
+Лучше не трогать.
+
+ 	
+vbv_init=<0.0−1.0> (ABR or two pass)
+
+ 	
+initial buffer occupancy, as a fraction of vbv_bufsize (default: 0.9)
+
+Лучше не трогать.
+
+ 	
+ip_factor=<value>
+
+ 	
+quantizer factor between I- and P-frames (default: 1.4)
+
+Лучше не трогать.
+
+ 	
+pb_factor=<value>
+
+ 	
+quantizer factor between P- and B-frames (default: 1.3)
+
+Лучше не трогать.
+
+ 	
+qcomp=<0−1> (ABR or two pass)
+
+ 	
+quantizer compression (default: 0.6). A lower value makes the bitrate more constant, while a higher value makes the quantization parameter more constant.
+
+Лучше не трогать.
+
+ 	
+cplx_blur=<0−999> (two pass only)
+
+ 	
+Temporal blur of the estimated frame complexity, before curve compression (default: 20). Lower values allow the quantizer value to jump around more, higher values force it to vary more smoothly. cplx_blur ensures that each I-frame has quality comparable to the following P-frames, and ensures that alternating high and low complexity frames (e.g. low fps animation) do not waste bits on fluctuating quantizer.
+
+Лучше не трогать.
+
+ 	
+qblur=<0−99> (two pass only)
+
+ 	
+Temporal blur of the quantization parameter, after curve compression (default: 0.5). Lower values allow the quantizer value to jump around more, higher values force it to vary more smoothly.
+
+Лучше не трогать.
+
+ 	
+zones=<zone0>[/<zone1>[/...]]
+
+ 	
+User specified quality for specific parts (ending, credits, ...). Each zone is <start-frame>,<end-frame>,<option> where option may be
+
+ 	
+q=<0−51>
+
+ 	
+quantizer
+
+ 	
+b=<0.01−100.0>
+
+ 	
+bitrate multiplier
+
+ 	
+NOTE: The quantizer option is not strictly enforced. It affects only the planning stage of ratecontrol, and is still subject to overflow compensation and qp_min/qp_max.
+
+Зоны фильма. Типа как бы титры можно кодировать с небольшим качеством, ну и другие возможые куски. Можно использовать если уж совсем места мало но при этом надо хорошо понимать какие факторы квантизации указывать, что вообще то мало кто понимает. Так что не очень юзабельная опция.
+
+ 	
+direct_pred=<name>
+
+ 	
+Determines the type of motion prediction used for direct macroblocks in B-frames.
+
+ 	
+none
+
+ 	
+Direct macroblocks are not used.
+
+ 
+ 	
+spatial
+
+ 	
+Motion vectors are extrapolated from neighboring blocks. (default)
+
+ 	
+temporal
+
+ 	
+Motion vectors are extrapolated from the following P-frame.
+
+ 	
+auto
+
+The codec selects between spatial and temporal for each frame.
+
+ 	
+Spatial and temporal are approximately the same speed and PSNR, the choice between them depends on the video content. Auto is slightly better, but slower. Auto is most effective when combined with multipass. direct_pred=none is both slower and lower quality.
+
+Какие кодировать макроблоки в B кадрах. Объяснять долго, и как понятно из описания лучше ставить auto.
+
+ 	
+(no)weight_b
+
+ 	
+Use weighted prediction in B-frames. Without this option, bidirectionally predicted macroblocks give equal weight to each reference frame. With this option, the weights are determined by the temporal position of the B-frame relative to the references. Requires bframes > 1.
+
+Взвешенное предсказание. Этот режим хорошо работает для переходов одной сцены в другую и собственно всё. Это когда в B кадре указываются сразу 2 референсных кадра на один макроблок с необходимыми коэффициентами, какую долю брать из какого. На практике качеству помогает слабо так как указание двух индексов и ещё и долей качества занимает много места, а поиск в motion estimation может очень сильно замедлить. Фактически никогда не используется.
+
+ 	
+partitions=<list>
+
+ 	
+Enable some optional macroblock types (default: p8x8,b8x8,i8x8,i4x4).
+
+ 	
+p8x8
+
+ 	
+Enable types p16x8, p8x16, p8x8.
+
+ 	
+p4x4
+
+ 	
+Enable types p8x4, p4x8, p4x4. p4x4 is
+
+ 	
+recommended only with subq >= 5, and only at low resolutions.
+
+ 	
+b8x8
+
+Enable types b16x8, b8x16, b8x8.
+
+ 	
+i8x8
+
+Enable type i8x8. i8x8 has no effect unless 8x8dct is enabled.
+
+ 	
+i4x4
+
+Enable type i4x4.
+
+ 	
+all
+
+Enable all of the above types.
+
+ 	
+none
+
+Disable all of the above types.
+
+ 	
+Regardless of this option, macroblock types p16x16, b16x16, and i16x16 are always enabled.
+The idea is to find the type and size that best describe a certain area of the picture. For example, a global pan is better represented by 16x16 blocks, while small moving objects are better represented by smaller blocks.
+
+Какие позволять подразбиения макроблоков. На качество влияет сильно. Лучше всего указать all. Хотя конечно скорость кодирования будет серьёзно увеличена, так как потребуется проверять все варианты, но умные алгоримты позволяют уменьшить перебор, то есть пробовать дополнительные подразбиения если хотя бы 8x16 или 16x8 даёт прирост качества.
+
+ 	
+(no)8x8dct
+
+ 	
+Adaptive spatial transform size: allows macroblocks to choose between 4x4 and 8x8 DCT. Also allows the i8x8 macroblock type. Without this option, only 4x4 DCT is used.
+
+Лучше не трогать.
+
+ 	
+me=<name>
+
+ 	
+Select fullpixel motion estimation algorithm.
+
+ 	
+dia
+
+ 	
+diamond search, radius 1 (fast)
+
+ 	
+hex
+
+ 	
+hexagon search, radius 2 (default)
+
+ 	
+umh
+
+ 	
+uneven multi-hexagon search (slow)
+
+ 	
+esa
+
+ 	
+exhaustive search (very slow, and no better than umh)
+
+Варианты алгоритмов для предсказания движения. Общепринято что UMH даёт лучшие результаты, правда он и медленнее других.
+
+ 	
+me_range=<4−64>
+
+ 	
+radius of exhaustive or multi-hexagon motion search (default: 16)
+
+Размер шестиугольника для предсказания движения. Умолчательное значение вполне разумное.
+
+ 	
+subq=<0−9>
+
+ 	
+Adjust subpel refinement quality. This parameter controls quality versus speed tradeoffs involved in the motion estimation decision process. subq=5 can compress up to 10% better than subq=1.
+
+ 	
+0
+
+ 	
+Runs fullpixel precision motion estimation on all candidate macroblock types. Then selects the best type with SAD metric (faster than subq=1, not recommended unless you’re looking for ultra-fast encoding).
+
+ 	
+1
+
+ 	
+Does as 0, then refines the motion of that type to fast quarterpixel precision (fast).
+
+ 	
+2
+
+ 	
+Runs halfpixel precision motion estimation on all candidate macroblock types. Then selects the best type with SATD metric. Then refines the motion of that type to fast quarterpixel precision.
+
+ 	
+3
+
+ 	
+As 2, but uses a slower quarterpixel refinement.
+
+ 	
+4
+
+ 	
+Runs fast quarterpixel precision motion estimation on all candidate macroblock types. Then selects the best type with SATD metric. Then finishes the quarterpixel refinement for that type.
+
+ 	
+5
+
+ 	
+Runs best quality quarterpixel precision motion estimation on all candidate macroblock types, before selecting the best type. Also refines the two motion vectors used in bidirectional macroblocks with SATD metric, rather than reusing vectors from the forward and backward searches.
+
+ 	
+6
+
+ 	
+Enables rate-distortion optimization of macroblock types in I- and P-frames (default).
+
+ 	
+7
+
+ 	
+Enables rate-distortion optimization of macroblock types in all frames.
+
+ 	
+8
+
+ 	
+Enables rate-distortion optimization of motion vectors and intra prediction modes in I- and P-frames.
+
+ 	
+9
+
+ 	
+Enables rate-distortion optimization of motion vectors and intra prediction modes in all frames (best).
+
+ 	
+In the above, "all candidates" does not exactly mean all enabled types: 4x4, 4x8, 8x4 are tried only if 8x8 is better than 16x16.
+
+Комплексный параметр, как бы выбора качества. Понятно что 9 самый лучший вариант, так как он включает максимальное количество оптимизационных алгоритмов. Для первого прохода при многопроходном кодировании можно ограничиться 7 или даже 5.
+
+ 	
+(no)chroma_me
+
+ 	
+Takes into account chroma information during subpixel motion search (default: enabled). Requires subq>=5.
+
+Учитывать цвет, а не только яркость при предсказании движения. Обычно при нормальном изображении Y и UV плоскости очень сильно коррелируют, так что в большинстве случаев предсказывают движение только по яркости. Но это бывает неправильно для различных аномальных клипов где по изображению плавают цветные пятна одинаковой яркости. Лучше этот параметр указывать даже для фильмов если требуется качественно кодирование.
+
+ 	
+(no)mixed_refs
+
+ 	
+Allows each 8x8 or 16x8 motion partition to independently select a reference frame. Without this option, a whole macroblock must use the same reference. Requires frameref>1.
+
+Позволять подразбиениям макроблока иметь различные вектора смещения. Очевидно необходимо для сцен со сложными движениями мелких деталей (трава на ветру, листья и т.д.). Надо указывать.
+
+ 	
+trellis=<0−2> (cabac only)
+
+ 	
+rate-distortion optimal quantization
+
+ 	
+0
+
+ 	
+disabled (default)
+
+ 	
+1
+
+ 	
+enabled only for the final encode
+
+ 	
+2
+
+ 	
+enabled during all mode decisions (slow, requires subq>=6)
+
+Оптимизация битового потока. Вещь необходимая для качества. Про алгоритмы писать долго, просто надо поверить что штука полезная, и надо указывать 2.
+
+ 	
+psy-rd=rd[,trell]
+
+ 	
+Sets the strength of the psychovisual optimization.
+
+ 	
+rd=<0.0−10.0>
+
+ 	
+psy optimization strength (requires subq>=6) (default: 1.0)
+
+ 	
+trell=<0.0−10.0>
+
+ 	
+trellis (requires trellis, experimental) (default: 0.0)
+
+Даже не знаю, не пробовал. Наверное лучше не стоит указывать так как это ещё и экспериментальная фича.
+
+ 	
+deadzone_inter=<0−32>
+
+ 	
+Set the size of the inter luma quantization deadzone for non-trellis quantization (default: 21). Lower values help to preserve fine details and film grain (typically useful for high bitrate/quality encode), while higher values help filter out these details to save bits that can be spent again on other macroblocks and frames (typically useful for bitrate-starved encodes). It is recommended that you start by tweaking deadzone_intra before changing this parameter.
+
+Тоже не знаю что такое. Ни разу не видел в использовании.
+
+
+Продолжение про опции в следующей части.
+МЕТКИ: h264, video
+Кодирование видео в H264 (часть 5)
+Продолжение про опции. Предыдущая часть была тут.
+
+
+ 	
+deadzone_intra=<0−32>
+
+ 	
+Set the size of the intra luma quantization deadzone for non-trellis quantization (default: 11). This option has the same effect as deadzone_inter except that it affects intra frames. It is recommended that you start by tweaking this parameter before changing deadzone_inter.
+
+Лучше не трогать.
+
+ 	
+(no)fast_pskip
+
+ 	
+Performs early skip detection in P-frames (default: enabled). This usually improves speed at no cost, but it can sometimes produce artifacts in areas with no details, like sky.
+
+В P и в B кадрах есть такое понятие как skip, когда макроблок фактически копируется из референсного кадра почти без движения. Это очень экономит биты, так как skip-ы кодируются в очень небольшое их количество, но на качестве может сказатья, особенно если битрейт небольшой. Для качественного кодирования стоит указывать nofast_pskip.
+
+ 	
+(no)dct_decimate
+
+ 	
+Eliminate dct blocks in P-frames containing only a small single coefficient (default: enabled). This will remove some details, so it will save bits that can be spent again on other frames, hopefully raising overall subjective quality. If you are compressing non-anime content with a high target bitrate, you may want to disable this to preserve as much detail as possible.
+
+Не знаю, опция вроде полезная, но требует изучения. Лучше оставить как есть.
+
+ 	
+nr=<0−100000>
+
+ 	
+Noise reduction, 0 means disabled. 100−1000 is a useful range for typical content, but you may want to turn it up a bit more for very noisy content (default: 0). Given its small impact on speed, you might want to prefer to use this over filtering noise away with video filters like denoise3d or hqdn3d.
+
+Когда снимают в темноте, камеры часто дают шум, который мало того что никому не интересен, так ещё и тратит много битов для его кодирования. Денойзинг вещь для кодирования видео очень полезная, но обычно эти фильтры есть во всех видео редакторах, так что встроенным в x264 денойзером пользоваться наверное не обязательно, тем более что я не знаю какие тут надо указывать числа.
+
+ 	
+chroma_qp_offset=<−12−12>
+
+ 	
+Use a different quantizer for chroma as compared to luma. Useful values are in the range <−2−2> (default: 0).
+
+Лучше не трогать.
+
+ 	
+aq_mode=<0−2>
+
+ 	
+Defines how adaptive quantization (AQ) distributes bits:
+
+ 	
+0
+
+ 	
+disabled
+
+ 
+ 	
+1
+
+ 	
+Avoid moving bits between frames.
+
+ 
+ 	
+2
+
+ 	
+Move bits between frames (by default).
+
+Полезная опция для перераспределения битов между кадрами с разным количеством движения и деталей. Включена по умолчанию, отключать не надо.
+
+ 
+ 	
+aq_strength=<positive float value>
+
+ 	
+Controls how much adaptive quantization (AQ) reduces blocking and blurring in flat and textured areas (default: 1.0). A value of 0.5 will lead to weak AQ and less details, when a value of 1.5 will lead to strong AQ and more details.
+
+Лучше не трогать.
+
+ 	
+cqm=<flat|jvt|<filename>>
+
+ 	
+Either uses a predefined custom quantization matrix or loads a JM format matrix file.
+
+ 	
+flat
+
+ 	
+Use the predefined flat 16 matrix (default).
+
+ 	
+jvt
+
+ 	
+Use the predefined JVT matrix.
+
+ 	
+<filename>
+
+ 	
+Use the provided JM format matrix file.
+
+ 	
+NOTE: Windows CMD.EXE users may experience problems with parsing the command line if they attempt to use all the CQM lists. This is due to a command line length limitation. In this case it is recommended the lists be put into a JM format CQM file and loaded as specified above.
+
+Пошли различные не стандартные матрицы для DCT преобразований. Как наверное понятно, лучше пользоваться стандартными. Я вообще не до конца понимаю зачем эти установки вынесены в настройки, разве что для каких-то исследований...
+
+ 	
+cqm4iy=<list> (also see cqm)
+
+ 	
+Custom 4x4 intra luminance matrix, given as a list of 16 comma separated values in the 1−255 range.
+
+ 	
+cqm4ic=<list> (also see cqm)
+
+ 	
+Custom 4x4 intra chrominance matrix, given as a list of 16 comma separated values in the 1−255 range.
+
+ 	
+cqm4py=<list> (also see cqm)
+
+ 	
+Custom 4x4 inter luminance matrix, given as a list of 16 comma separated values in the 1−255 range.
+
+ 	
+cqm4pc=<list> (also see cqm)
+
+ 	
+Custom 4x4 inter chrominance matrix, given as a list of 16 comma separated values in the 1−255 range.
+
+ 	
+cqm8iy=<list> (also see cqm)
+
+ 	
+Custom 8x8 intra luminance matrix, given as a list of 64 comma separated values in the 1−255 range.
+
+ 	
+cqm8py=<list> (also see cqm)
+
+ 	
+Custom 8x8 inter luminance matrix, given as a list of 64 comma separated values in the 1−255 range.
+
+ 	
+level_idc=<10−51>
+
+ 	
+Set the bitstream’s level as defined by annex A of the H.264 standard (default: 51 − level 5.1). This is used for telling the decoder what capabilities it needs to support. Use this parameter only if you know what it means, and you have a need to set it.
+
+Уровень h264. Кроме профилей, которые в h264 определяют фичи (типа поддержки CABAC) есть уровни, которые требуют каких-то свойств от устройства декодирования. Скажем, уровень 4.1 специфицирует максимальное количество референсных кадров 6, так что железячные декодеры могут с ним справиться. В 5.1 таких кадров может быть до 16, что требует очень много памяти. Для blue ray кажется используется 4.1, но для современных компьютеров и умолчательный 5.1 вполне подходит даже для HD.
+
+ 	
+threads=<0−16>
+
+ 	
+Spawn threads to encode in parallel on multiple CPUs (default: 1). This has a slight penalty to compression quality. 0 or ’auto’ tells x264 to detect how many CPUs you have and pick an appropriate number of threads.
+
+Многопоточность. Это всегда хорошо учитывая что сейчас все процессоры многоядерные. Но ущерб качеству может быть нанесён больший чем тут написано. По моему опыту в x264 видимо параллельность сейчас сделана покадровая (не до конца понятно как это у них получается учитывая все зависимости между кадрами, но код GPL я смотреть не могу). Так что если количество потоков большое, то все кадры параллельно кодируются с примерно одинаковым фактором квантизации. Выглядит это примерно так, в начале пачка (примерно столько столько потоков) кадров кодируется с большим битрейтом. Потом внезапно encoder обнаруживает что нифига в битрейт он так не впишется, и следующую пачку кадров жмёт очень сильно при этом серьёзно теряя качество. Постепенно этот процесс устаканивается до следующего IDR или смены сцены.
+
+Это справедливо в первую очередь для сильной распараллеленности, я проверял на 8- и 16- процессорных машине. Обычно стольких процессоров у нормальных людей нет, так что даже в случае 4 ядер можно наверное использовать без опасений. Плюс я уверен что многопроходное кодирование должно помочь для предсказания квантизации, так как ошибаться encoder может только если не знает заранее что там у него впереди. Но так это или нет, я не знаю. Не пробовал.
+
+ 	
+(no)global_header
+
+ 	
+Causes SPS and PPS to appear only once, at the beginning of the bitstream (default: disabled). Some players, such as the Sony PSP, require the use of this option. The default behavior causes SPS and PPS to repeat prior to each IDR frame.
+
+Лучше не включать, так как многие проигрыватели требуют повторяющихся SPS и PPS.
+
+ 	
+(no)interlaced
+
+ 	
+Treat the video content as interlaced.
+
+Указывает вариант видео. Я думаю объяснять что такое черезстрочное кодирование никому не надо. Все видео камеры обычно снимают в interlaced если не включать progressive.
+
+ 	
+log=<−1−3>
+
+ 	
+Adjust the amount of logging info printed to the screen.
+
+ 	
+−1
+
+ 	
+none
+
+ 	
+0
+
+ 	
+Print errors only.
+
+ 	
+1
+
+ 	
+warnings
+
+ 	
+2
+
+ 	
+PSNR and other analysis statistics when the encode finishes (default)
+
+ 	
+3
+
+ 	
+PSNR, QP, frametype, size, and other statistics for every frame
+
+Всякая статистика после кодирования. Кому надо, и кто понимает что там смотреть, можно включить.
+
+ 	
+(no)psnr
+
+ 	
+Print signal-to-noise ratio statistics.
+NOTE: The ’Y’, ’U’, ’V’, and ’Avg’ PSNR fields in the summary are not mathematically sound (they are simply the average of per-frame PSNRs). They are kept only for comparison to the JM reference codec. For all other purposes, please use either the ’Global’ PSNR, or the per-frame PSNRs printed by log=3.
+
+JM encoder это референсный encoder разрабатываемый кажется ITU-T. Опция интересна только разработчикам кодекоков типа меня..
+
+ 	
+(no)ssim
+
+ 	
+Print the Structural Similarity Metric results. This is an alternative to PSNR, and may be better correlated with the perceived quality of the compressed video.
+
+Печатать метрику SSIM. Она на порядок сложнее вычисляется чем PSNR, а говорит что-то мало кому, даже разработчикам, хотя считается что более правильно отражает качество восприятия человеком. Интересно только разработчикам кодеков.
+
+ 	
+(no)visualize
+
+ 	
+Enable x264 visualizations during encoding. If the x264 on your system supports it, a new window will be opened during the encoding process, in which x264 will attempt to present an overview of how each frame gets encoded. Each block type on the visualized movie will be colored as follows:
+
+ 	
+red/pink
+
+ 	
+intra block
+
+ 	
+blue
+
+ 	
+inter block
+
+ 	
+green
+
+ 	
+skip block
+
+ 	
+yellow
+
+ 	
+B-block
+
+ 	
+This feature can be considered experimental and subject to change. In particular, it depends on x264 being compiled with visualizations enabled. Note that as of writing this, x264 pauses after encoding and visualizing each frame, waiting for the user to press a key, at which point the next frame will be encoded.
+
+Визуализировать макроблоки. Интересно исключительно разработчикам x264.
+
+
+Следующая часть будет про практические примеры использования опций mencoder.
